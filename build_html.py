@@ -1,5 +1,6 @@
 import html
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -34,8 +35,28 @@ def colour(party):
     return PARTY_COLOURS.get(party, "#8a8f98")
 
 
+SHORT_PARTY = {
+    "Aotearoa Legalise Cannabis Party": "Legalise Cannabis",
+    "NZ Outdoors & Freedom Party": "Outdoors & Freedom",
+    "Animal Justice Party Aotearoa New Zealand": "Animal Justice",
+    "New Zealand Loyal": "NZ Loyal",
+    "Women’s Rights Party": "Women's Rights",
+    "Women's Rights Party": "Women's Rights",
+}
+
+
+def short_party(party):
+    party = SHORT_PARTY.get(party, party)
+    return re.sub(r"\s*\(.*?\)\s*$", "", party)
+
+
 def chip(party):
-    return f'<span class="chip" style="--c:{colour(party)}">{esc(party)}</span>'
+    return f'<span class="chip" style="--c:{colour(party)}">{esc(short_party(party))}</span>'
+
+
+def candidate_cell(name, party):
+    return (f'<span class="cand"><span class="dot" style="--c:{colour(party)}"></span>'
+            f'<span><span class="cn">{esc(name)}</span><small>{esc(short_party(party))}</small></span></span>')
 
 
 def n(value):
@@ -63,7 +84,7 @@ def rounds_table(electorate, outcome):
     names = [c["name"] for c in electorate["candidates"]]
     party_of = {c["name"]: c["party"] for c in electorate["candidates"]}
     rounds = outcome["rounds"]
-    head = "".join(f"<th>R{i + 1}</th>" for i in range(len(rounds)))
+    head = "".join(f"<th>{'Final' if i == len(rounds) - 1 else f'R{i + 1}'}</th>" for i in range(len(rounds)))
     rows = []
     for name in names:
         cells = []
@@ -71,7 +92,7 @@ def rounds_table(electorate, outcome):
             value = r["tallies"].get(name)
             cells.append(f"<td>{n(value)}</td>" if value is not None else '<td class="out">out</td>')
         winner = ' class="won"' if name == outcome["winner"]["name"] else ""
-        rows.append(f'<tr{winner}><th scope="row">{chip(party_of[name])} {esc(name)}</th>{"".join(cells)}</tr>')
+        rows.append(f'<tr{winner}><th scope="row">{candidate_cell(name, party_of[name])}</th>{"".join(cells)}</tr>')
     exhausted = "".join(f"<td>{n(r['exhausted'])}</td>" for r in rounds)
     rows.append(f'<tr class="ex"><th scope="row">Exhausted</th>{exhausted}</tr>')
     return (f'<div class="scroll"><table class="rounds"><thead><tr><th>Candidate</th>{head}</tr></thead>'
@@ -167,7 +188,7 @@ def footer():
         for year, items in SOURCES)
     disclaimers = "".join(f"<li>{esc(d)}</li>" for d in DISCLAIMERS)
     return f'''
-<footer class="foot">
+<footer class="foot" id="sources">
   <section>
     <h2>Data sources</h2>
     {sources}
@@ -252,11 +273,17 @@ SCRIPT = """
 (function () {
   var buttons = document.querySelectorAll('.yr');
   var panels = document.querySelectorAll('section.year');
+  function toFinalRound(root) {
+    root.querySelectorAll('.scroll').forEach(function (s) { s.scrollLeft = s.scrollWidth; });
+  }
   function show(year, push) {
     var found = false;
     panels.forEach(function (p) { if (p.dataset.year === year) found = true; });
     if (!found) return;
-    panels.forEach(function (p) { p.hidden = p.dataset.year !== year; });
+    panels.forEach(function (p) {
+      p.hidden = p.dataset.year !== year;
+      if (!p.hidden) toFinalRound(p);
+    });
     buttons.forEach(function (b) {
       var on = b.dataset.year === year;
       b.classList.toggle('on', on);
@@ -266,6 +293,34 @@ SCRIPT = """
   }
   var DEFAULT = document.body.dataset.default;
   buttons.forEach(function (b) { b.addEventListener('click', function () { show(b.dataset.year, true); }); });
+  var reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  document.querySelectorAll('details').forEach(function (d) {
+    d.addEventListener('toggle', function () { if (d.open) toFinalRound(d); });
+    var summary = d.querySelector('summary');
+    var body = d.querySelector('.body');
+    var anim = null;
+    summary.addEventListener('click', function (e) {
+      if (reduceMotion.matches || !body.animate) return;
+      e.preventDefault();
+      var start = d.open ? body.offsetHeight : 0;
+      if (anim) anim.cancel();
+      var closing = d.open && d.dataset.closing !== '1';
+      if (closing) {
+        d.dataset.closing = '1';
+        anim = body.animate([{ height: start + 'px', opacity: 1 }, { height: '0px', opacity: 0 }],
+                            { duration: 200, easing: 'ease-in' });
+        anim.onfinish = function () { d.open = false; d.dataset.closing = ''; anim = null; };
+      } else {
+        d.dataset.closing = '';
+        d.open = true;
+        var end = body.scrollHeight;
+        anim = body.animate([{ height: (start || 0) + 'px', opacity: start ? 1 : 0 }, { height: end + 'px', opacity: 1 }],
+                            { duration: 240, easing: 'cubic-bezier(.2,.7,.3,1)' });
+        anim.onfinish = function () { anim = null; };
+      }
+    });
+  });
+  toFinalRound(document);
   var fromHash = location.hash.replace('#', '');
   if (fromHash) show(fromHash, false);
   window.addEventListener('hashchange', function () { show(location.hash.replace('#', '') || DEFAULT, false); });
@@ -305,8 +360,8 @@ h1 {{ font-size: clamp(28px, 5vw, 40px); line-height: 1.1; margin: 0 0 12px; let
 h2 {{ font-size: 20px; margin: 48px 0 12px; }}
 h3 {{ font-size: 18px; margin: 0; }}
 .lede {{ color: var(--muted); max-width: 64ch; margin: 0; }}
-.compare {{ display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); margin-top: 28px; }}
-.panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }}
+.compare {{ display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(min(280px, 100%), 1fr)); margin-top: 28px; }}
+.panel {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }}
 .panel h2 {{ margin: 0 0 12px; font-size: 15px; color: var(--muted); font-weight: 600; }}
 .bar {{ display: flex; height: 18px; border-radius: 4px; overflow: hidden; gap: 2px; }}
 .seg {{ background: var(--c); }}
@@ -314,8 +369,8 @@ h3 {{ font-size: 18px; margin: 0; }}
 .legend li {{ display: flex; align-items: center; gap: 6px; }}
 .chip {{ display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 600; white-space: nowrap; }}
 .chip::before {{ content: ""; width: 10px; height: 10px; border-radius: 3px; background: var(--c); }}
-.cards {{ display: grid; gap: 16px; }}
-.card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }}
+.cards {{ display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }}
+.card {{ background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; min-width: 0; }}
 .card header {{ display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; align-items: center; }}
 .swap {{ display: flex; align-items: center; gap: 8px; margin: 0; }}
 .arrow {{ width: 16px; height: 16px; color: var(--muted); }}
@@ -323,7 +378,13 @@ h3 {{ font-size: 18px; margin: 0; }}
 .scroll {{ overflow-x: auto; }}
 table.rounds {{ border-collapse: collapse; font-size: 13px; font-variant-numeric: tabular-nums; width: 100%; }}
 .rounds th, .rounds td {{ padding: 6px 10px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }}
-.rounds th[scope="row"], .rounds thead th:first-child {{ text-align: left; font-weight: 500; }}
+.rounds th[scope="row"], .rounds thead th:first-child {{ text-align: left; font-weight: 500;
+  position: sticky; left: 0; z-index: 1; background: var(--panel); white-space: normal; min-width: 140px;
+  box-shadow: inset -1px 0 0 var(--line); }}
+.cand {{ display: flex; align-items: flex-start; gap: 8px; }}
+.dot {{ flex: none; width: 10px; height: 10px; margin-top: 4px; border-radius: 3px; background: var(--c); }}
+.cn {{ display: block; }}
+.cand small {{ display: block; color: var(--muted); font-size: 12px; font-weight: 400; }}
 .rounds thead th {{ color: var(--muted); font-weight: 600; }}
 .rounds td.out {{ color: var(--muted); opacity: .6; }}
 .rounds tr.won th, .rounds tr.won td:last-child {{ font-weight: 700; }}
@@ -339,10 +400,11 @@ summary::-webkit-details-marker {{ display: none; }}
 summary:hover {{ background: var(--hover); }}
 summary:focus-visible {{ outline: 2px solid var(--accent); outline-offset: -2px; }}
 .chev {{ width: 14px; height: 14px; color: var(--muted); transition: transform .15s; }}
-details[open] .chev {{ transform: rotate(90deg); }}
+details[open]:not([data-closing="1"]) .chev {{ transform: rotate(90deg); }}
+.chev {{ transition: transform .2s ease; }}
 details.flipped .name {{ font-weight: 700; }}
 .same {{ color: var(--muted); font-size: 13px; }}
-.body {{ padding: 4px 14px 16px 42px; }}
+.body {{ padding: 4px 14px 16px 42px; overflow: hidden; }}
 .note {{ color: var(--muted); font-size: 13px; margin: 0 0 8px; }}
 .method {{ color: var(--muted); max-width: 70ch; }}
 .method li {{ margin-bottom: 6px; }}
@@ -362,9 +424,15 @@ details.flipped .name {{ font-weight: 700; }}
 .foot a:focus-visible {{ outline: 2px solid var(--accent); outline-offset: 2px; }}
 .status {{ margin: 12px 0 0; padding: 10px 14px; border-radius: 8px; background: var(--hover); font-size: 14px; max-width: 64ch; }}
 @media (max-width: 560px) {{
-  .list-head, summary {{ grid-template-columns: 14px 1fr 86px 86px; }}
+  main {{ padding-top: 28px; }}
+  h2 {{ font-size: 18px; margin-top: 36px; }}
+  .card, .panel {{ padding: 14px; }}
+  .detail {{ font-size: 15px; }}
+  .rounds th, .rounds td {{ padding: 6px 8px; }}
+  .list-head, summary {{ grid-template-columns: 14px minmax(0, 1fr) 100px 100px; gap: 8px; padding: 10px 12px; }}
   .list-head span:last-child, .margin {{ display: none; }}
-  .body {{ padding-left: 14px; }}
+  summary .chip {{ font-size: 12px; }}
+  .body {{ padding: 4px 12px 14px; }}
 }}
 </style>
 </head>
